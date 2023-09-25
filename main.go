@@ -34,8 +34,8 @@ func main() {
 		if err != nil {
 			log.Fatalf("Could not get home directory: %v", err)
 		}
-		candidateConfigPath := "/.kube/config"
-		if _, err := os.Stat(dir + candidateConfigPath); err == nil {
+		candidateConfigPath := dir + "/.kube/config"
+		if _, err := os.Stat(candidateConfigPath); err == nil {
 			configPath = candidateConfigPath
 		}
 	}

@@ -34,7 +34,10 @@ func main() {
 		if err != nil {
 			log.Fatalf("Could not get home directory: %v", err)
 		}
-		configPath = dir + "/.kube/config"
+		candidateConfigPath := "/.kube/config"
+		if _, err := os.Stat(dir + candidateConfigPath); err == nil {
+			configPath = candidateConfigPath
+		}
 	}
 	config, err := clientcmd.BuildConfigFromFlags("", configPath)
 	if err != nil {

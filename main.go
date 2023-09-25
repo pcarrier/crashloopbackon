@@ -50,7 +50,6 @@ func main() {
 watchloop:
 	for evt := range watch.ResultChan() {
 		pod := evt.Object.(*v1.Pod)
-		log.Printf("%v/%v:%v", pod.Namespace, pod.Name, evt.Type)
 		switch evt.Type {
 		case "ADDED", "MODIFIED":
 			for _, status := range pod.Status.ContainerStatuses {
@@ -59,7 +58,7 @@ watchloop:
 						log.Printf("Pod %v/%v is in CrashLoopBackOff, deleting", pod.Namespace, pod.Name)
 						for {
 							if _, _, err = chat.PostMessage(*channelId, slack.MsgOptionText(
-								fmt.Sprintf("Deleting pod `%s/%s`", pod.Namespace, pod.Name), false)); err != nil {
+								fmt.Sprintf("Deleting crashlooping pod `%s/%s`", pod.Namespace, pod.Name), false)); err != nil {
 								var rlError *slack.RateLimitedError
 								if errors.As(err, &rlError) {
 									log.Printf("Rate limited, sleeping %s", rlError.RetryAfter)

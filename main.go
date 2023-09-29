@@ -2,31 +2,24 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
-	"github.com/slack-go/slack"
+	"github.com/DataDog/datadog-api-client-go/v2/api/datadog"
+	"github.com/DataDog/datadog-api-client-go/v2/api/datadogV1"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 	"log"
 	"os"
-	"time"
-)
-
-var (
-	channelId = flag.String("slack-channel-id", "C05SP2XRK7G", "Slack channel for announcements")
+	"strconv"
 )
 
 func main() {
 	flag.Parse()
 
-	slackToken, found := os.LookupEnv("SLACK_TOKEN")
-	if !found {
-		log.Fatal("Please set SLACK_TOKEN")
-	}
-	chat := slack.New(slackToken)
+	ctx := datadog.NewDefaultContext(context.Background())
+	ddEvents := datadogV1.NewEventsApi(datadog.NewAPIClient(datadog.NewConfiguration()))
 
 	configPath, found := os.LookupEnv("KUBECONFIG")
 	if !found {
@@ -45,39 +38,52 @@ func main() {
 	}
 	cs := kubernetes.NewForConfigOrDie(config)
 
-	watch, err := cs.CoreV1().Pods("").Watch(context.Background(), metav1.ListOptions{})
+	watch, err := cs.CoreV1().Pods("").Watch(ctx, metav1.ListOptions{})
 
 watchloop:
 	for evt := range watch.ResultChan() {
 		pod := evt.Object.(*v1.Pod)
-		switch evt.Type {
-		case "ADDED", "MODIFIED":
-			for _, status := range pod.Status.ContainerStatuses {
-				if w := status.State.Waiting; w != nil {
-					if w.Reason == "CrashLoopBackOff" {
-						log.Printf("Pod %v/%v is in CrashLoopBackOff, deleting", pod.Namespace, pod.Name)
-						for {
-							if _, _, err = chat.PostMessage(*channelId, slack.MsgOptionText(
-								fmt.Sprintf("Deleting crashlooping pod `%s/%s`", pod.Namespace, pod.Name), false)); err != nil {
-								var rlError *slack.RateLimitedError
-								if errors.As(err, &rlError) {
-									log.Printf("Rate limited, sleeping %s", rlError.RetryAfter)
-									time.Sleep(rlError.RetryAfter)
-									break
-								}
-								log.Fatalf("Could not post Slack message: %v", err)
-							} else {
-								break
+		if v, found := pod.Labels["crashloopbackon"]; found {
+			if b, _ := strconv.ParseBool(v); !b {
+				continue watchloop
+			}
+			switch evt.Type {
+			case "ADDED", "MODIFIED":
+				for _, status := range pod.Status.ContainerStatuses {
+					if w := status.State.Waiting; w != nil {
+						if w.Reason == "CrashLoopBackOff" {
+							if err := handle(pod, cs, ctx, ddEvents, status.Name); err != nil {
+								log.Fatalf("Could not handle %v: %v", pod, err)
 							}
+							continue watchloop
 						}
-						err := cs.CoreV1().Pods(pod.Namespace).Delete(context.Background(), pod.Name, metav1.DeleteOptions{})
-						if err != nil {
-							log.Printf("Could not delete %v/%v: %v", pod.Namespace, pod.Name, err)
-						}
-						continue watchloop
 					}
 				}
 			}
 		}
 	}
+}
+
+func handle(pod *v1.Pod, cs *kubernetes.Clientset, ctx context.Context, events *datadogV1.EventsApi, containerName string) error {
+	tags := []string{
+		fmt.Sprintf("namespace:%s", pod.Namespace),
+		fmt.Sprintf("pod_name:%s", pod.Name),
+		fmt.Sprintf("workload:%s", containerName),
+	}
+	if pteam, found := pod.Labels["com.apollographql/primaryTeam"]; found {
+		tags = append(tags, fmt.Sprintf("team:%s", pteam))
+	}
+	if _, _, err := events.CreateEvent(ctx, datadogV1.EventCreateRequest{
+		Title: fmt.Sprintf("crashlooping %s/%s (%s)", containerName, pod.Namespace, pod.Name),
+		Text:  fmt.Sprintf("A pod entered `CrashLoopBackOff` and was restarted by `crashloopbackon`(https://github.com/pcarrier/crashloopbackon).\n"),
+		Tags:  tags,
+	}); err != nil {
+		return fmt.Errorf("datadog submission failed: %w", err)
+	}
+
+	if err := cs.CoreV1().Pods(pod.Namespace).Delete(ctx, pod.Name, metav1.DeleteOptions{}); err != nil {
+		return fmt.Errorf("pod deletion failed: %w", err)
+	}
+
+	return nil
 }

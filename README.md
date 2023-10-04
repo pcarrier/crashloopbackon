@@ -1,6 +1,6 @@
 # crashloopbackon: delete CrashLoopBackoff pods
 
-Small Go program to announce CrashLoopBackoff pods to Slack then delete them.
+Small Go program to announce CrashLoopBackoff pods labeled with `crashloopbackon` = `true` to Slack then delete them.
 
 This lets them be recreated promptly, rather than delay a possible recovery.
 

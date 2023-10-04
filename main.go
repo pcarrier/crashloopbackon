@@ -45,7 +45,9 @@ func main() {
 	}
 	cs := kubernetes.NewForConfigOrDie(config)
 
-	watch, err := cs.CoreV1().Pods("").Watch(context.Background(), metav1.ListOptions{})
+	watch, err := cs.CoreV1().Pods("").Watch(context.Background(), metav1.ListOptions{
+		LabelSelector: "crashloopbackon = true",
+	})
 
 watchloop:
 	for evt := range watch.ResultChan() {

@@ -45,41 +45,45 @@ func main() {
 	}
 	cs := kubernetes.NewForConfigOrDie(config)
 
-	watch, err := cs.CoreV1().Pods("").Watch(context.Background(), metav1.ListOptions{
-		LabelSelector: "crashloopbackon = true",
-	})
+	for {
+		watch, err := cs.CoreV1().Pods("").Watch(context.Background(), metav1.ListOptions{
+			LabelSelector: "crashloopbackon = true",
+		})
 
-watchloop:
-	for evt := range watch.ResultChan() {
-		pod := evt.Object.(*v1.Pod)
-		switch evt.Type {
-		case "ADDED", "MODIFIED":
-			for _, status := range pod.Status.ContainerStatuses {
-				if w := status.State.Waiting; w != nil {
-					if w.Reason == "CrashLoopBackOff" {
-						log.Printf("Pod %v/%v is in CrashLoopBackOff, deleting", pod.Namespace, pod.Name)
-						for {
-							if _, _, err = chat.PostMessage(*channelId, slack.MsgOptionText(
-								fmt.Sprintf("Deleting crashlooping pod `%s/%s`", pod.Namespace, pod.Name), false)); err != nil {
-								var rlError *slack.RateLimitedError
-								if errors.As(err, &rlError) {
-									log.Printf("Rate limited, sleeping %s", rlError.RetryAfter)
-									time.Sleep(rlError.RetryAfter)
+	watchloop:
+		for evt := range watch.ResultChan() {
+			pod := evt.Object.(*v1.Pod)
+			switch evt.Type {
+			case "ADDED", "MODIFIED":
+				for _, status := range pod.Status.ContainerStatuses {
+					if w := status.State.Waiting; w != nil {
+						if w.Reason == "CrashLoopBackOff" {
+							log.Printf("Pod %v/%v is in CrashLoopBackOff, deleting", pod.Namespace, pod.Name)
+							for {
+								if _, _, err = chat.PostMessage(*channelId, slack.MsgOptionText(
+									fmt.Sprintf("Deleting crashlooping pod `%s/%s`", pod.Namespace, pod.Name), false)); err != nil {
+									var rlError *slack.RateLimitedError
+									if errors.As(err, &rlError) {
+										log.Printf("Rate limited, sleeping %s", rlError.RetryAfter)
+										time.Sleep(rlError.RetryAfter)
+										break
+									}
+									log.Fatalf("Could not post Slack message: %v", err)
+								} else {
 									break
 								}
-								log.Fatalf("Could not post Slack message: %v", err)
-							} else {
-								break
 							}
+							err := cs.CoreV1().Pods(pod.Namespace).Delete(context.Background(), pod.Name, metav1.DeleteOptions{})
+							if err != nil {
+								log.Printf("Could not delete %v/%v: %v", pod.Namespace, pod.Name, err)
+							}
+							continue watchloop
 						}
-						err := cs.CoreV1().Pods(pod.Namespace).Delete(context.Background(), pod.Name, metav1.DeleteOptions{})
-						if err != nil {
-							log.Printf("Could not delete %v/%v: %v", pod.Namespace, pod.Name, err)
-						}
-						continue watchloop
 					}
 				}
 			}
 		}
+
+		log.Printf("Now the watch has ended. Re-watching.")
 	}
 }

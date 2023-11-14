@@ -50,6 +50,10 @@ func main() {
 			LabelSelector: "crashloopbackon = true",
 		})
 
+		if err != nil {
+			log.Fatalf("Failed to set up watch: %v", err)
+		}
+
 	watchloop:
 		for evt := range watch.ResultChan() {
 			pod := evt.Object.(*v1.Pod)
@@ -75,7 +79,7 @@ func main() {
 							}
 							err := cs.CoreV1().Pods(pod.Namespace).Delete(context.Background(), pod.Name, metav1.DeleteOptions{})
 							if err != nil {
-								log.Printf("Could not delete %v/%v: %v", pod.Namespace, pod.Name, err)
+								log.Fatalf("Could not delete %v/%v: %v", pod.Namespace, pod.Name, err)
 							}
 							continue watchloop
 						}
